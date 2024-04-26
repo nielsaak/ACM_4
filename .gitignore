@@ -1,3 +1,15 @@
+# Ignore all
+*
+# Unignore all with extensions
+!*.*
+# Unignore all dirs
+!*/
+.DS_Store
+/.DS_Store
+/*/.DS_Store
+
+data/*.txt
+
 # History files
 .Rhistory
 .Rapp.history
@@ -47,3 +59,5 @@ po/*~
 
 # RStudio Connect folder
 rsconnect/
+
+

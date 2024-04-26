@@ -1,0 +1,531 @@
+
+```{r}
+pacman::p_load(tidyverse,
+               here,
+               posterior,
+               cmdstanr,
+               brms, 
+               tidybayes, 
+               loo,
+               sigmoid,
+               future,
+               furrr,
+               purrr)
+```
+
+```{r}
+feat_1 <- c(0,1) # spots
+feat_2 <- c(0,1) # eyes
+feat_3 <- c(0,1)
+feat_4 <- c(0,1) # arms
+feat_5 <- c(0,1)
+
+stimuli <- expand.grid(feat_1 = feat_1, feat_2 = feat_2, feat_3 = feat_3, feat_4 = feat_4, feat_5 = feat_5)
+stimuli <- rbind(stimuli[sample(nrow(stimuli)),],stimuli[sample(nrow(stimuli)),],stimuli[sample(nrow(stimuli)),])
+
+danger <- ifelse((stimuli$feat_1 == 1) & (stimuli$feat_2 == 1), 1, 0)
+nutri <- ifelse((stimuli$feat_4 == 1), 1, 0)
+```
+
+```{r}
+# Distance
+distance <- function(vect1, vect2, w) {
+  return(sum(w * abs(vect1 - vect2)))
+}
+
+# Similarity
+similarity <- function(distance, c) {
+  return(exp(-c * distance))
+}
+```
+
+```{r}
+# investigating the distances
+distance_list_eq <- c()
+distance_list_w1 <- c()
+distance_list_w2 <- c()
+
+for (i in 1:nrow(stimuli)){
+  for (j in 1:nrow(stimuli)){
+    distance_list_eq <- c(distance_list_eq, distance(stimuli[i,], stimuli[j,], rep(1/5,5)))
+    distance_list_w1 <- c(distance_list_w1, distance(stimuli[i,], stimuli[j,], c(1/2,1/2,0,0,0)))
+    distance_list_w2 <- c(distance_list_w2, distance(stimuli[i,], stimuli[j,], c(0,0,3/10,3/10,4/10)))
+  }
+}
+
+plot(distance_list_eq)
+plot(distance_list_w1)
+plot(distance_list_w2)
+```
+
+
+```{r}
+### generative model ###
+gcm <- function(w, c, obs, cat_one, quiet = TRUE) {
+  # create an empty list to save probability of saying "1" for each trial
+  r <- c()
+  
+  ntrials <- nrow(obs)
+  
+  for (i in 1:ntrials) {
+    # If quiet is FALSE, print every ten trials
+    if (!quiet && i %% 10 == 0) {
+      print(paste("i =", i))
+    }
+    # if this is the first trial, or there any category with no exemplars seen yet, set the choice to random
+    if (i == 1 || sum(cat_one[1:(i - 1)]) == 0 || sum(cat_one[1:(i - 1)]) == (i - 1)) {
+      r <- c(r, .5)
+    } else {
+      similarities <- c()
+      # for each previously seen stimulus assess distance and similarity
+      for (e in 1:(i - 1)) {
+        sim <- similarity(distance(obs[i, ], obs[e, ], w), c)
+        similarities <- c(similarities, sim)
+      }
+      # Calculate prob of saying "1" by dividing similarity to 1 by the sum of similarity to 1 and to 2
+      numerator <- mean(similarities[cat_one[1:(i - 1)] == 1])
+      denominator <- mean(similarities[cat_one[1:(i - 1)] == 1]) + mean(similarities[cat_one[1:(i - 1)] == 0])
+      r <- c(r, numerator / denominator)
+    }
+  }
+
+  return(rbinom(ntrials, 1, r))
+}
+
+### generative model ###
+gcm_lim <- function(w, c, obs, cat_one, quiet = TRUE, memory) {
+  # create an empty list to save probability of saying "1" for each trial
+  r <- c()
+  
+  ntrials <- nrow(obs)
+  
+  for (i in 1:ntrials) {
+    low_mem <- (relu(i-(memory+1))+1)
+    # If quiet is FALSE, print every ten trials
+    if (!quiet && i %% 10 == 0) {
+      print(paste("i =", i))
+    }
+    # if this is the first trial, or there any category with no exemplars seen yet, set the choice to random
+    if (i == 1 || sum(cat_one[low_mem:(i - 1)]) == 0 || sum(cat_one[low_mem:(i - 1)]) == (i - low_mem)) {
+      r <- c(r, .5)
+    } else {
+      similarities <- c()
+      # for the previous 5 stimulus assess distance and similarity
+      # relu(i-(memory+1))+1 is a way of achieving a memory = memory
+      for (e in low_mem:(i - 1)) {
+        sim <- similarity(distance(obs[i, ], obs[e, ], w), c)
+        similarities <- c(similarities, sim)
+      }
+      # Calculate prob of saying "1" by dividing similarity to 1 by the sum of similarity to 1 and to 2
+      numerator <- mean(similarities[cat_one[low_mem:(i - 1)] == 1])
+      denominator <- mean(similarities[cat_one[low_mem:(i - 1)] == 1]) + mean(similarities[cat_one[low_mem:(i - 1)] == 0])
+      r <- c(r, numerator / denominator)
+    }
+  }
+
+  return(rbinom(ntrials, 1, r))
+}
+```
+
+```{r}
+# testing the function
+simulated_data_inf_mem <- tibble(trial = seq(nrow(stimuli)),
+                         sim_response = gcm(
+                           w = rep(1/5, 5), 
+                           c = 2,
+                           obs = stimuli,
+                           cat_one = danger),
+                         danger = danger,
+                         correct = ifelse(danger == sim_response, 1, 0),
+                         c = 2,
+                         w = 1/5)
+
+simulated_data_lim_mem <- tibble(trial = seq(nrow(stimuli)),
+                         sim_response = gcm_lim(
+                           w = rep(1/5, 5), 
+                           c = 2,
+                           obs = stimuli,
+                           cat_one = danger,
+                           memory = 5),
+                         danger = danger,
+                         correct = ifelse(danger == sim_response, 1, 0),
+                         c = 2,
+                         w = 1/5)
+
+simulated_data_inf_mem$cumsum_correct <- cumsum(simulated_data_inf_mem$correct)/seq_along(simulated_data_inf_mem$correct)
+simulated_data_lim_mem$cumsum_correct <- cumsum(simulated_data_lim_mem$correct)/seq_along(simulated_data_lim_mem$correct)
+
+simulated_data_inf_mem %>% 
+  ggplot(aes(x = trial, y = cumsum_correct)) +
+  geom_line(aes(colour = "Inf_mem")) +
+  geom_line(aes(y = simulated_data_lim_mem$cumsum_correct,colour = " Lim_mem")) +
+  ggtitle("Cumulative rate of correct responses for one participant (Inf Memory)")
+```
+
+```{r}
+# multiple agents across different parameters
+# function for simulation responses
+simulate_responses <- function(agent, w, c) {
+  
+    stimuli_temp <- stimuli
+    stimuli_temp$danger <- danger
+    shuffled_stim <- stimuli_temp[sample(nrow(stimuli_temp)),]
+    shuffled_stim_ <- shuffled_stim %>% 
+      select(-danger)
+    danger_ <- shuffled_stim %>% 
+      select(danger) %>% 
+      unlist()
+  
+    if (w == "equal") {
+        weight <- rep(1 / 5, 5)
+    } else if (w == "skewed1") {
+        weight <- c(1/2,1/2,0,0,0)
+    } else if (w == "skewed2") {
+        weight <- c(0,0,3/10,3/10,4/10)
+    }
+
+    # simulate responses
+    responses <- gcm(
+        weight,
+        c,
+        shuffled_stim_,
+        danger_
+    )
+    
+    df_temp <- tibble(trial = seq(nrow(shuffled_stim_)),
+                         sim_response = responses,
+                         danger_col = danger_,
+                         correct = ifelse(danger_col == sim_response, 1, 0),
+                         performance = cumsum(correct) / seq_along(correct),
+                         c = c,
+                         w = w,
+                         agent = agent)
+    
+    df_temp <- cbind(df_temp, shuffled_stim_)
+    
+    return(df_temp)
+}
+
+
+# simulate responses
+plan(multisession, workers = availableCores())
+
+param_df <- dplyr::tibble(
+    expand_grid(
+        agent = 1:5,
+        c = seq(.5, 2, 0.3),
+        w = c("equal", "skewed1", "skewed2")
+    )
+)
+
+simulated_responses <- future_pmap_dfr(param_df,
+    simulate_responses,
+    .options = furrr_options(seed = TRUE),
+    .progress = TRUE
+)
+```
+
+```{r}
+p3 <- simulated_responses %>%
+  mutate(w = as.factor(w)) %>%
+  ggplot(aes(trial, performance, group = w, color = w)) +
+  geom_smooth() +
+  theme_bw() +
+  facet_wrap(c ~ .)
+
+p4 <- simulated_responses %>%
+  mutate(c = as.factor(c)) %>%
+  ggplot(aes(trial, performance, group = c, color = c)) +
+  geom_smooth() +
+  theme_bw() +
+  facet_wrap(w ~ .)
+
+p3
+p4
+```
+
+
+```{r}
+# compare to real agents
+df <- read_csv("data/AlienData.txt")
+
+df <- df %>% 
+  filter(condition == 1, session == 1) %>% 
+  group_by(subject) %>% 
+  mutate(performance = cumsum(correct) / seq_along(correct))
+
+df %>% 
+  ggplot(aes(trial, performance, colour = as.factor(subject))) +
+  geom_smooth() +
+  theme_bw()
+
+```
+
+# Parameter recovery
+
+```{r}
+# Compiling model
+gcm_model <- cmdstan_model("stan/gcm_bayesian.stan", cpp_options = list(stan_threads = TRUE), pedantic = TRUE)
+```
+
+```{r}
+weights_sim <- c(1/2,1/2,0,0,0)
+# weights_sim <- rep(1/5, 5)
+# weights_sim <- c(0,0,3/10,3/10,4/10)
+c_val <- 1.5
+
+stimuli_sim <- rbind(stimuli)
+danger_sim <- c(danger)
+
+simulated_data_inf_mem <- tibble(trial = seq(nrow(stimuli_sim)),
+                                 sim_response = gcm(
+                                   w = weights_sim, 
+                                   c = c_val,
+                                   obs = stimuli_sim,
+                                   cat_one = danger_sim),
+                                 danger_col = danger_sim,
+                                 correct = ifelse(danger_col == sim_response, 1, 0))
+
+data_gcm_Bayes <- list(
+  ntrials = nrow(simulated_data_inf_mem),
+  nfeatures = 5,
+  cat_one = danger_sim,
+  y = simulated_data_inf_mem$sim_response,
+  obs = as.matrix(stimuli_sim),
+  b = 0.5,
+  w_prior_values = c(1,1,1,1,1), # used in the dirichlet distribution, so <lower=1>
+  c_prior_values = c(0,1) # mean and standard deviation for logit normal distribution
+  )
+
+samples <- gcm_model$sample(
+   data = data_gcm_Bayes,
+   seed = 123,
+   chains =4,
+   parallel_chains = 4,
+   threads_per_chain = 2,
+   iter_warmup = 2000,
+   iter_sampling = 2000,
+   refresh = 500,
+   max_treedepth = 20,
+   adapt_delta = 0.99,
+)
+
+
+```
+
+```{r}
+samples$summary()
+```
+```{r}
+draws_df <- as_draws_df(samples$draws())
+
+ggplot(draws_df, aes(.iteration, c, group = .chain, color = .chain)) +
+  geom_line(alpha = 0.5) +
+  theme_classic()
+
+ggplot(draws_df, aes(.iteration, logit_c, group = .chain, color = .chain)) +
+  geom_line(alpha = 0.5) +
+  theme_classic()
+
+ggplot(draws_df, aes(.iteration, `w[1]`, group = .chain, color = .chain)) +
+  geom_line(alpha = 0.5) +
+  theme_classic()
+
+ggplot(draws_df, aes(.iteration, `w[2]`, group = .chain, color = .chain)) +
+  geom_line(alpha = 0.5) +
+  theme_classic()
+
+ggplot(draws_df, aes(.iteration, `w[3]`, group = .chain, color = .chain)) +
+  geom_line(alpha = 0.5) +
+  theme_classic()
+
+ggplot(draws_df, aes(.iteration, `w[4]`, group = .chain, color = .chain)) +
+  geom_line(alpha = 0.5) +
+  theme_classic()
+
+ggplot(draws_df, aes(.iteration, `w[5]`, group = .chain, color = .chain)) +
+  geom_line(alpha = 0.5) +
+  theme_classic()
+
+ggplot(draws_df) +
+  geom_histogram(aes(c), alpha = 0.6, fill = "lightblue") +
+  geom_histogram(aes(c_prior), alpha = 0.6, fill = "pink") +
+  geom_vline(xintercept = c_val) +
+  theme_bw()
+
+ggplot(draws_df) +
+  geom_histogram(aes(`w[1]`), alpha = 0.6, fill = "lightblue") +
+  geom_histogram(aes(`w_prior[1]`), alpha = 0.6, fill = "pink") +
+  geom_vline(xintercept = weights_sim[1]) +
+  theme_bw()
+ggplot(draws_df) +
+  geom_histogram(aes(`w[2]`), alpha = 0.6, fill = "lightblue") +
+  geom_histogram(aes(`w_prior[2]`), alpha = 0.6, fill = "pink") +
+  geom_vline(xintercept = weights_sim[2]) +
+  theme_bw()
+ggplot(draws_df) +
+  geom_histogram(aes(`w[3]`), alpha = 0.6, fill = "lightblue") +
+  geom_histogram(aes(`w_prior[3]`), alpha = 0.6, fill = "pink") +
+  geom_vline(xintercept = weights_sim[3]) +
+  theme_bw()
+ggplot(draws_df) +
+  geom_histogram(aes(`w[4]`), alpha = 0.6, fill = "lightblue") +
+  geom_histogram(aes(`w_prior[4]`), alpha = 0.6, fill = "pink") +
+  geom_vline(xintercept = weights_sim[4]) +
+  theme_bw()
+ggplot(draws_df) +
+  geom_histogram(aes(`w[5]`), alpha = 0.6, fill = "lightblue") +
+  geom_histogram(aes(`w_prior[5]`), alpha = 0.6, fill = "pink") +
+  geom_vline(xintercept = weights_sim[5]) +
+  theme_bw()
+
+draws_df %>% 
+  mutate(all_but_w1 = `w[2]`+`w[3]`+`w[4]`+`w[5]`) %>% 
+  ggplot() +
+  geom_point(aes(`w[1]`, all_but_w1), alpha = 0.6, color = "lightblue") +
+  theme_bw()
+
+ggplot(draws_df) +
+  geom_point(aes(c, `w[1]`), alpha = 0.6, color = "lightblue") +
+  theme_bw()
+
+ggplot(draws_df) +
+  geom_point(aes(c, `w[2]`), alpha = 0.6, color = "lightblue") +
+  theme_bw()
+
+ggplot(draws_df) +
+  geom_point(aes(c, `w[3]`), alpha = 0.6, color = "lightblue") +
+  theme_bw()
+
+ggplot(draws_df) +
+  geom_point(aes(c, `w[4]`), alpha = 0.6, color = "lightblue") +
+  theme_bw()
+
+ggplot(draws_df) +
+  geom_point(aes(c, `w[5]`), alpha = 0.6, color = "lightblue") +
+  theme_bw()
+
+ggplot(draws_df) +
+  geom_point(aes(`w[1]`, `w[2]`), alpha = 0.6, color = "lightblue") +
+  theme_bw()
+
+```
+
+## Full Parameter Recovery
+
+```{r}
+plan(multisession, workers = availableCores())
+
+sim_d_and_fit <- function(agent, scaling, weights) {
+  
+    
+    temp <- simulated_responses %>% subset(
+      c == scaling & w == weights & agent == agent
+      )
+    
+    data <- list(
+      ntrials = nrow(temp),
+      nfeatures = 5,
+      cat_one = temp$danger_col,
+      y = temp$sim_response,
+      obs = as.matrix(temp[, c("feat_1", "feat_2", "feat_3", "feat_4", "feat_5")]),
+      b = 0.5, 
+      w_prior_values = c(1, 1, 1, 1, 1),
+      c_prior_values = c(0, 1)
+    )
+    
+    samples_gcm <- gcm_model$sample(
+      data = data,
+      seed = 123,
+      chains = 1,
+      parallel_chains = 1,
+      threads_per_chain = 4,
+      iter_warmup = 1000,
+      iter_sampling = 1000,
+      refresh = 500
+    )
+    
+    draws_df <- as_draws_df(samples_gcm$draws()) 
+    temp <- tibble(trueC = scaling, trueW = weights, agent = agent,
+                   estC = draws_df$c, 
+                   estW1 = draws_df$`w[1]`,
+                   estW2 = draws_df$`w[2]`,
+                   estW3 = draws_df$`w[3]`,
+                   estW4 = draws_df$`w[4]`,
+                   estW5 = draws_df$`w[5]`
+                   )
+    
+    return(temp)
+  
+}
+
+
+temp <- tibble(unique(simulated_responses[,c("agent", "c", "w")])) %>%
+  rename(
+    scaling = c,
+    weights = w
+  )
+
+recovery_df <- future_pmap_dfr(temp, sim_d_and_fit, .options = furrr_options(seed = TRUE), .progress = TRUE)
+
+write_csv(recovery_df, "output/gcm_parameter_recovery.csv")
+
+```
+
+
+
+
+
+# Parameter Estimation
+
+```{r}
+df <- read_csv("data/AlienData.txt")
+
+df <- df %>% 
+  filter(condition == 1, session == 1) %>% 
+  mutate(resp_dan = ifelse((response == 3)|(response==4), 1, 0)) %>% 
+  mutate(correct_dan = ifelse(resp_dan == dangerous, 1, 0)) %>% 
+  group_by(subject) %>% 
+  mutate(performance_dan = cumsum(correct_dan) / seq_along(correct_dan))
+
+df <- df %>% 
+  filter(condition == 1, session == 1) %>% 
+  mutate(resp_nut = ifelse((response == 2)|(response==4), 1, 0)) %>% 
+  mutate(correct_nut = ifelse(resp_nut == nutricious, 1, 0)) %>% 
+  group_by(subject) %>% 
+  mutate(performance_nut = cumsum(correct_nut) / seq_along(correct_nut))
+
+df %>% 
+  ggplot(aes(trial, performance_dan, colour = as.factor(subject))) +
+  geom_smooth() +
+  theme_bw()
+
+df %>% 
+  ggplot(aes(trial, performance_nut, colour = as.factor(subject))) +
+  geom_smooth() +
+  theme_bw()
+
+df %>% 
+  group_by(subject) %>% 
+  mutate(cum_dan = cumsum(resp_dan)) %>% 
+  mutate(cum_dan_true = cumsum(dangerous)) %>% 
+  ggplot() +
+  geom_smooth(aes(trial, cum_dan, colour = as.factor(subject))) +
+  geom_smooth(aes(trial, cum_dan_true)) 
+
+df %>% 
+  group_by(subject) %>% 
+  mutate(cum_dan = cumsum(resp_dan)) %>% 
+  mutate(cum_dan_true = cumsum(dangerous)) %>% 
+  ggplot() +
+  geom_smooth(aes(trial, cum_dan_true)) 
+  
+
+df %>% 
+  group_by(subject) %>% 
+  mutate(cum_nut = cumsum(resp_nut)) %>% 
+  ggplot(aes(trial, cum_nut, colour = as.factor(subject))) +
+  geom_smooth()
+```
+
+
