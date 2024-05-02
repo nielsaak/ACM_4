@@ -40,7 +40,7 @@ parameters {
     vector[nsubjects] logit_c;    // scaling parameter (how fast similarity decrease with distance). 
     
     simplex[nfeatures] weight;  // simplex means sum(w)=1
-    real<lower=0> kappa;
+    real<lower=0.1> kappa;
     array[nsubjects] simplex[nfeatures] w_ind;    // weight parameter (how much attention should be paid to feature 1 related to feature 2 - summing up to 1)
 }
 
@@ -77,8 +77,8 @@ transformed parameters {
             
             array[sum(cat_one[:(trial-1)])] int tmp_idx_one = cat_one_idx[:sum(cat_one[:(trial-1)])];
             array[sum(cat_two[:(trial-1)])] int tmp_idx_two = cat_two_idx[:sum(cat_two[:(trial-1)])];
-            similarities[1] = sum(exemplar_sim[tmp_idx_one]);
-            similarities[2] = sum(exemplar_sim[tmp_idx_two]);
+            similarities[1] = mean(exemplar_sim[tmp_idx_one]);
+            similarities[2] = mean(exemplar_sim[tmp_idx_two]);
 
             // calculate r
             rr[trial,sub] = (b*similarities[1]) / (b*similarities[1] + (1-b)*similarities[2]);
