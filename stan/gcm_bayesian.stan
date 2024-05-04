@@ -100,7 +100,7 @@ generated quantities {
     // priors
     simplex[nfeatures] w_prior = dirichlet_rng(w_prior_values);
     real logit_c_prior = normal_rng(c_prior_values[1], c_prior_values[2]);
-    real<lower=0, upper=2> c_prior = inv_logit(logit_c_prior)*5;
+    real<lower=0, upper=5> c_prior = inv_logit(logit_c_prior)*5;
 
     // prior pred
     array[ntrials] real<lower=0, upper=1> r_prior;
