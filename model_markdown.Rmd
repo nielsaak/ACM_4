@@ -1,4 +1,6 @@
 
+## Load packages
+
 ```{r}
 pacman::p_load(tidyverse,
                here,
@@ -12,6 +14,69 @@ pacman::p_load(tidyverse,
                furrr,
                purrr)
 ```
+
+## Visualise data for descriptive statistics
+
+### Load data
+
+```{r}
+data <- read.csv("data/AlienData.txt",
+                header = TRUE)
+
+# Filter for the right session
+filtered_data <- data[data$session == 1, ]
+
+# Filter for condition for now
+filtered_data <- data[data$condition == 1, ]
+
+view(filtered_data)
+
+length(unique(filtered_data$subject))
+
+df <- filtered_data
+```
+
+### Visualise
+
+```{r}
+# Visualisations
+
+# Category
+ggplot(df, aes(x = as.factor(category))) +
+  geom_bar() +
+  labs(x = "Category", y = "Count", title = "Distribution of Categories") +
+  theme_minimal()
+
+# Response
+ggplot(df, aes(x = as.factor(response))) +
+  geom_bar() +
+  labs(x = "Response", y = "Count", title = "Distribution of Responses") +
+  theme_minimal()
+
+# Response vs category
+confusion_matrix <- df %>% # Create a confusion matrix/table
+  group_by(category, response) %>%
+  summarise(Count = n()) %>%
+  ungroup()
+
+ggplot(confusion_matrix, aes(x = response, y = category, fill = Count)) + # Create a heatmap
+  geom_tile(color = "white") +
+  scale_fill_gradient(low = "white", high = "steelblue") +
+  labs(x = "Response", y = "Category", title = "Category vs Response", fill = "Count") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) # Rotate x labels for readability
+
+# Reaction time
+# Filter for everything below 50.000
+rt_df <- df[df$RT <= 50000, ]
+
+ggplot(rt_df, aes(x = RT)) +
+  geom_histogram(binwidth = 50, fill = "blue", color = "black") +
+  labs(x = "Reaction Time (RT)", y = "Frequency", title = "Histogram of Reaction Times") +
+  theme_minimal()
+```
+
+## Simulate conditions and features
 
 ```{r}
 feat_1 <- c(0,1) # spots
@@ -27,6 +92,8 @@ danger <- ifelse((stimuli$feat_1 == 1) & (stimuli$feat_2 == 1), 1, 0)
 nutri <- ifelse((stimuli$feat_4 == 1), 1, 0)
 ```
 
+## Calculate distance and similarity
+
 ```{r}
 # Distance
 distance <- function(vect1, vect2, w) {
@@ -40,7 +107,7 @@ similarity <- function(distance, c) {
 ```
 
 ```{r}
-# investigating the distances
+# Investigating the distances
 distance_list_eq <- c()
 distance_list_w1 <- c()
 distance_list_w2 <- c()
@@ -57,12 +124,12 @@ plot(distance_list_eq)
 plot(distance_list_w1)
 plot(distance_list_w2)
 ```
-
+## GCM
 
 ```{r}
-### generative model ###
+### Generative model (infinite memory) ###
 gcm <- function(w, c, obs, cat_one, quiet = TRUE) {
-  # create an empty list to save probability of saying "1" for each trial
+  # Create an empty list to save probability of saying "1" for each trial
   r <- c()
   
   ntrials <- nrow(obs)
@@ -72,12 +139,12 @@ gcm <- function(w, c, obs, cat_one, quiet = TRUE) {
     if (!quiet && i %% 10 == 0) {
       print(paste("i =", i))
     }
-    # if this is the first trial, or there any category with no exemplars seen yet, set the choice to random
+    # If this is the first trial, or there any category with no exemplars seen yet, set the choice to random
     if (i == 1 || sum(cat_one[1:(i - 1)]) == 0 || sum(cat_one[1:(i - 1)]) == (i - 1)) {
       r <- c(r, .5)
     } else {
       similarities <- c()
-      # for each previously seen stimulus assess distance and similarity
+      # For each previously seen stimulus assess distance and similarity
       for (e in 1:(i - 1)) {
         sim <- similarity(distance(obs[i, ], obs[e, ], w), c)
         similarities <- c(similarities, sim)
@@ -92,9 +159,9 @@ gcm <- function(w, c, obs, cat_one, quiet = TRUE) {
   return(rbinom(ntrials, 1, r))
 }
 
-### generative model ###
+### Generative model (limited memory) ###
 gcm_lim <- function(w, c, obs, cat_one, quiet = TRUE, memory) {
-  # create an empty list to save probability of saying "1" for each trial
+  # Create an empty list to save probability of saying "1" for each trial
   r <- c()
   
   ntrials <- nrow(obs)
@@ -105,12 +172,12 @@ gcm_lim <- function(w, c, obs, cat_one, quiet = TRUE, memory) {
     if (!quiet && i %% 10 == 0) {
       print(paste("i =", i))
     }
-    # if this is the first trial, or there any category with no exemplars seen yet, set the choice to random
+    # If this is the first trial, or there any category with no exemplars seen yet, set the choice to random
     if (i == 1 || sum(cat_one[low_mem:(i - 1)]) == 0 || sum(cat_one[low_mem:(i - 1)]) == (i - low_mem)) {
       r <- c(r, .5)
     } else {
       similarities <- c()
-      # for the previous 5 stimulus assess distance and similarity
+      # For the previous 5 stimulus assess distance and similarity
       # relu(i-(memory+1))+1 is a way of achieving a memory = memory
       for (e in low_mem:(i - 1)) {
         sim <- similarity(distance(obs[i, ], obs[e, ], w), c)
@@ -128,7 +195,7 @@ gcm_lim <- function(w, c, obs, cat_one, quiet = TRUE, memory) {
 ```
 
 ```{r}
-# testing the function
+# Testing the function
 simulated_data_inf_mem <- tibble(trial = seq(nrow(stimuli)),
                          sim_response = gcm(
                            w = rep(1/5, 5), 
@@ -162,9 +229,12 @@ simulated_data_inf_mem %>%
   ggtitle("Cumulative rate of correct responses for one participant (Inf Memory)")
 ```
 
+## Simulating responses
+Simulates responses of multiple agents to randomized stimuli under various weighting and scaling configurations
+
 ```{r}
-# multiple agents across different parameters
-# function for simulation responses
+# Multiple agents across different parameters
+# Function for simulation responses
 simulate_responses <- function(agent, w, c) {
   
     stimuli_temp <- stimuli
@@ -184,7 +254,7 @@ simulate_responses <- function(agent, w, c) {
         weight <- c(0,0,3/10,3/10,4/10)
     }
 
-    # simulate responses
+    # Simulate responses
     responses <- gcm(
         weight,
         c,
@@ -207,7 +277,7 @@ simulate_responses <- function(agent, w, c) {
 }
 
 
-# simulate responses
+# Simulate responses
 plan(multisession, workers = availableCores())
 
 param_df <- dplyr::tibble(
@@ -224,6 +294,8 @@ simulated_responses <- future_pmap_dfr(param_df,
     .progress = TRUE
 )
 ```
+
+### Plotting the simulated responses
 
 ```{r}
 p3 <- simulated_responses %>%
@@ -243,10 +315,10 @@ p4 <- simulated_responses %>%
 p3
 p4
 ```
-
+### Comparing to real agents
 
 ```{r}
-# compare to real agents
+# Compare to real agents
 df <- read_csv("data/AlienData.txt")
 
 df <- df %>% 
@@ -261,7 +333,7 @@ df %>%
 
 ```
 
-# Parameter recovery
+## Single-level simulated parameter recovery
 
 ```{r}
 # Compiling model
@@ -312,9 +384,11 @@ samples <- gcm_model$sample(
 
 
 ```
+### Printing the output
 
 ```{r}
 samples$summary()
+
 ```
 ```{r}
 draws_df <- as_draws_df(samples$draws())
@@ -358,21 +432,25 @@ ggplot(draws_df) +
   geom_histogram(aes(`w_prior[1]`), alpha = 0.6, fill = "pink") +
   geom_vline(xintercept = weights_sim[1]) +
   theme_bw()
+
 ggplot(draws_df) +
   geom_histogram(aes(`w[2]`), alpha = 0.6, fill = "lightblue") +
   geom_histogram(aes(`w_prior[2]`), alpha = 0.6, fill = "pink") +
   geom_vline(xintercept = weights_sim[2]) +
   theme_bw()
+
 ggplot(draws_df) +
   geom_histogram(aes(`w[3]`), alpha = 0.6, fill = "lightblue") +
   geom_histogram(aes(`w_prior[3]`), alpha = 0.6, fill = "pink") +
   geom_vline(xintercept = weights_sim[3]) +
   theme_bw()
+
 ggplot(draws_df) +
   geom_histogram(aes(`w[4]`), alpha = 0.6, fill = "lightblue") +
   geom_histogram(aes(`w_prior[4]`), alpha = 0.6, fill = "pink") +
   geom_vline(xintercept = weights_sim[4]) +
   theme_bw()
+
 ggplot(draws_df) +
   geom_histogram(aes(`w[5]`), alpha = 0.6, fill = "lightblue") +
   geom_histogram(aes(`w_prior[5]`), alpha = 0.6, fill = "pink") +
@@ -472,9 +550,8 @@ write_csv(recovery_df, "output/gcm_parameter_recovery.csv")
 
 ```
 
+## Multi-level simulated parameter recovery
 
-
-# Parameter recovery (Multi-level)
 ```{r}
 agents <- 25
 scalingM <- 1
@@ -584,10 +661,7 @@ samples_gcm_ml <- gcm_multi_model$sample(
 )
 ```
 
-
-
-
-# Parameter Estimation
+## Parameter Estimation
 
 ```{r}
 df <- read_csv("data/AlienData.txt")
@@ -631,7 +705,6 @@ df %>%
   ggplot() +
   geom_smooth(aes(trial, cum_dan_true)) 
   
-
 df %>% 
   group_by(subject) %>% 
   mutate(cum_nut = cumsum(resp_nut)) %>% 
