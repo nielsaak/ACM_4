@@ -849,80 +849,124 @@ for (subject_id in unique(df$subject)) {
 ```
 
 ```{r}
-# Check convergence for one of the models (e.g., the first subject)
-print(results[[1]]$summary(c("parameters")))
+# Check rhat
+print(results[[5]])
 ```
+
+### Parameter means
 
 ```{r}
-# Calculate mean of parameter estimates across all subjects
-param_means <- lapply(results, function(x) as.data.frame(x$summary(c("parameters"))) %>% summarise_all(mean))
-mean_w1 <- mean(sapply(param_means, function(x) x["w[1]", "mean"]))
-mean_c <- mean(sapply(param_means, function(x) x["c", "mean"]))
+param_means <- list()  # Reinitializing to make sure it's empty before the loop starts
 
-print(mean_w1)
-print(mean_c)
+for (subject_id in unique(df$subject)) {
+  samples <- results[[subject_id]]
+  
+  # Extract summary and convert to a data frame
+  summary_df <- as.data.frame(samples$summary())
+
+  # Ensure only numeric columns are summarized
+  numeric_summary_df <- summary_df %>%
+    select_if(~is.numeric(.))
+
+  # Calculate the mean for each numeric column
+  mean_values <- numeric_summary_df %>%
+    summarise(across(everything(), mean, na.rm = TRUE))
+
+  # Append subject identifier
+  mean_values$Subject <- subject_id
+
+  # Store in list
+  param_means[[subject_id]] <- mean_values
+
+  # Debugging output
+  print(paste("Processed data for subject", subject_id))
+}
+
+# Combine all parameter means into one data frame
+combined_param_means <- bind_rows(param_means, .id = "Subject_ID")
+
+# Check the combined data
+print("Combined parameter means:")
+print(combined_param_means)
+
+# Using pivot_longer to reshape data for plotting
+# Make sure to exclude 'Subject_ID' from the reshaping operation explicitly
+long_means <- combined_param_means %>%
+  pivot_longer(
+    cols = -c(Subject_ID, ess_bulk, ess_tail),  # Exclude some columns from being pivoted
+    names_to = "Parameter", 
+    values_to = "MeanValue"
+  )
+
+# Remove columns
+long_means <- long_means %>% select(-ess_bulk)
+long_means <- long_means %>% select(-ess_tail)
+
+# For some reason, we have parameter rows called 'Subject'
+long_means <- long_means[long_means$Parameter != 'Subject', ]
+
+print(head(long_means))
+
+# Plotting
+ggplot(long_means, aes(x = Parameter, y = MeanValue, fill = Subject_ID)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  theme_minimal() +
+  labs(title = "Mean Parameter Estimates per Subject", x = "Parameter", y = "Mean Value") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
 ```
-
 
 ```{r}
 draws_df <- as_draws_df(samples$draws())
 
-ggplot(draws_df, aes(.iteration, c, group = .chain, color = .chain)) +
+# Reshape from wide to long
+long_draws_df <- draws_df %>%
+  pivot_longer(
+    cols = c(c, logit_c, `w[1]`, `w[2]`, `w[3]`, `w[4]`, `w[5]`),  # specify the columns to lengthen
+    names_to = "Parameter",
+    values_to = "Value"
+  )
+
+# Plot with facets
+ggplot(long_draws_df, aes(x = .iteration, y = Value, group = .chain, color = .chain)) +
   geom_line(alpha = 0.5) +
-  theme_classic()
+  facet_wrap(~ Parameter, scales = "free_y") +
+  theme_classic() +
+  labs(title = "Parameter Traces Across Chains", x = "Iteration", y = "Parameter Value") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1),  # Improve x-axis label readability
+        strip.background = element_blank(),  # Remove background of facet labels
+        strip.text.x = element_text(size = 10))  # Adjust size of facet labels
 
-ggplot(draws_df, aes(.iteration, logit_c, group = .chain, color = .chain)) +
-  geom_line(alpha = 0.5) +
-  theme_classic()
+# Create separate data frames for actual and prior values, then combine
+actual_data <- draws_df %>%
+  pivot_longer(
+    cols = c(c, `w[1]`, `w[2]`, `w[3]`, `w[4]`, `w[5]`),
+    names_to = "Parameter",
+    values_to = "Value"
+  ) %>%
+  mutate(Type = "Actual")
 
-ggplot(draws_df, aes(.iteration, `w[1]`, group = .chain, color = .chain)) +
-  geom_line(alpha = 0.5) +
-  theme_classic()
+prior_data <- draws_df %>%
+  pivot_longer(
+    cols = c(c_prior, `w_prior[1]`, `w_prior[2]`, `w_prior[3]`, `w_prior[4]`, `w_prior[5]`),
+    names_to = "Parameter",
+    values_to = "Value"
+  ) %>%
+  mutate(Type = "Prior")
 
-ggplot(draws_df, aes(.iteration, `w[2]`, group = .chain, color = .chain)) +
-  geom_line(alpha = 0.5) +
-  theme_classic()
+# Fix Parameter names to align actual and prior
+prior_data$Parameter <- gsub("_prior", "", prior_data$Parameter)
 
-ggplot(draws_df, aes(.iteration, `w[3]`, group = .chain, color = .chain)) +
-  geom_line(alpha = 0.5) +
-  theme_classic()
+# Combine actual and prior data
+combined_data <- bind_rows(actual_data, prior_data)
 
-ggplot(draws_df, aes(.iteration, `w[4]`, group = .chain, color = .chain)) +
-  geom_line(alpha = 0.5) +
-  theme_classic()
-
-ggplot(draws_df, aes(.iteration, `w[5]`, group = .chain, color = .chain)) +
-  geom_line(alpha = 0.5) +
-  theme_classic()
-
-ggplot(draws_df) +
-  geom_histogram(aes(c), alpha = 0.6, fill = "lightblue") +
-  geom_histogram(aes(c_prior), alpha = 0.6, fill = "pink") +
-  theme_bw()
-
-ggplot(draws_df) +
-  geom_histogram(aes(`w[1]`), alpha = 0.6, fill = "lightblue") +
-  geom_histogram(aes(`w_prior[1]`), alpha = 0.6, fill = "pink") +
-  theme_bw()
-
-ggplot(draws_df) +
-  geom_histogram(aes(`w[2]`), alpha = 0.6, fill = "lightblue") +
-  geom_histogram(aes(`w_prior[2]`), alpha = 0.6, fill = "pink") +
-  theme_bw()
-
-ggplot(draws_df) +
-  geom_histogram(aes(`w[3]`), alpha = 0.6, fill = "lightblue") +
-  geom_histogram(aes(`w_prior[3]`), alpha = 0.6, fill = "pink") +
-  theme_bw()
-
-ggplot(draws_df) +
-  geom_histogram(aes(`w[4]`), alpha = 0.6, fill = "lightblue") +
-  geom_histogram(aes(`w_prior[4]`), alpha = 0.6, fill = "pink") +
-  theme_bw()
-
-ggplot(draws_df) +
-  geom_histogram(aes(`w[5]`), alpha = 0.6, fill = "lightblue") +
-  geom_histogram(aes(`w_prior[5]`), alpha = 0.6, fill = "pink") +
-  theme_bw()
+# Plot using ggplot with facets
+ggplot(combined_data, aes(x = Value, fill = Type, alpha = Type)) +
+  geom_histogram(position = "identity", bins = 30) +  # Adjust number of bins as necessary
+  facet_wrap(~ Parameter, scales = "free_x") +
+  scale_fill_manual(values = c(Actual = "lightblue", Prior = "pink")) +
+  scale_alpha_manual(values = c(Actual = 0.6, Prior = 0.6)) +
+  theme_bw() +
+  theme(legend.position = "bottom") +
+  labs(title = "Histograms of Parameters and Their Priors", x = "Value", y = "Count")
 ```
 
