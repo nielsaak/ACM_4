@@ -12,7 +12,8 @@ pacman::p_load(tidyverse,
                sigmoid,
                future,
                furrr,
-               purrr)
+               purrr,
+               ggpubr)
 ```
 
 ## Visualise data for descriptive statistics
@@ -28,8 +29,6 @@ filtered_data <- data[data$session == 1, ]
 
 # Filter for condition for now
 filtered_data <- data[data$condition == 1, ]
-
-view(filtered_data)
 
 length(unique(filtered_data$subject))
 
@@ -293,27 +292,34 @@ simulated_responses <- future_pmap_dfr(param_df,
     .options = furrr_options(seed = TRUE),
     .progress = TRUE
 )
+
+write_csv(simulated_responses, "output/gcm_full_simulation.csv")
 ```
 
 ### Plotting the simulated responses
 
 ```{r}
-p3 <- simulated_responses %>%
+p1 <- simulated_responses %>%
   mutate(w = as.factor(w)) %>%
   ggplot(aes(trial, performance, group = w, color = w)) +
   geom_smooth() +
   theme_bw() +
-  facet_wrap(c ~ .)
+  facet_wrap(c ~ .) +
+  labs(title = "Cumulative Performance", subtitle = "For different levels of C", x = "Trials", y = "Performance")
 
-p4 <- simulated_responses %>%
+p2 <- simulated_responses %>%
   mutate(c = as.factor(c)) %>%
   ggplot(aes(trial, performance, group = c, color = c)) +
   geom_smooth() +
   theme_bw() +
-  facet_wrap(w ~ .)
+  facet_wrap(w ~ .) +
+  labs(title = "Cumulative Performance", subtitle = "For different weight combinations", x = "Trials", y = "Performance")
 
-p3
-p4
+p1
+p2
+
+ggsave(filename = "figures/simulated_performance_1.png", plot = p1)
+ggsave(filename = "figures/simulated_performance_2.png", plot = p2)
 ```
 ### Comparing to real agents
 
@@ -323,14 +329,21 @@ df <- read_csv("data/AlienData.txt")
 
 df <- df %>% 
   filter(condition == 1, session == 1) %>% 
+  filter(!str_detect(stimulus, "pt")) %>% 
+  mutate(resp_dan = ifelse((response == 3)|(response==4), 1, 0)) %>% 
+  mutate(correct_dan = ifelse(resp_dan == dangerous, 1, 0)) %>% 
   group_by(subject) %>% 
-  mutate(performance = cumsum(correct) / seq_along(correct))
+  mutate(performance_dan = cumsum(correct_dan) / seq_along(correct_dan))
 
-df %>% 
-  ggplot(aes(trial, performance, colour = as.factor(subject))) +
+p3 <- df %>% 
+  ggplot(aes(trial, performance_dan, colour = as.factor(subject))) +
   geom_smooth() +
-  theme_bw()
+  theme_bw() +
+  labs(title = "Cumulative Performance", subtitle = "Performance on dangerous category in the true data", x = "Trials", y = "Performance", colour = "Subjects")
+ 
+p3 
 
+ggsave(filename = "figures/true_performance_1.png", plot = p3)
 ```
 
 ## Single-level simulated parameter recovery
@@ -386,106 +399,144 @@ samples <- gcm_model$sample(
 ### Printing the output
 
 ```{r}
-samples$summary()
+samples_summary <- samples$summary()
+
+samples_summary
+
+write_csv(samples_summary, "output/gcm_parameter_recovery_example.csv")
 ```
 
 ```{r}
+# sampling diagnostics
+
+samples$cmdstan_diagnose()
+
 draws_df <- as_draws_df(samples$draws())
 
-ggplot(draws_df, aes(.iteration, c, group = .chain, color = .chain)) +
+sampling_p1 <- ggplot(draws_df, aes(.iteration, c, group = .chain, color = .chain)) +
   geom_line(alpha = 0.5) +
   theme_classic()
 
-ggplot(draws_df, aes(.iteration, logit_c, group = .chain, color = .chain)) +
+sampling_p2 <- ggplot(draws_df, aes(.iteration, logit_c, group = .chain, color = .chain)) +
   geom_line(alpha = 0.5) +
   theme_classic()
 
-ggplot(draws_df, aes(.iteration, `w[1]`, group = .chain, color = .chain)) +
+sampling_p3<- ggplot(draws_df, aes(.iteration, `w[1]`, group = .chain, color = .chain)) +
   geom_line(alpha = 0.5) +
   theme_classic()
 
-ggplot(draws_df, aes(.iteration, `w[2]`, group = .chain, color = .chain)) +
+sampling_p4 <- ggplot(draws_df, aes(.iteration, `w[2]`, group = .chain, color = .chain)) +
   geom_line(alpha = 0.5) +
   theme_classic()
 
-ggplot(draws_df, aes(.iteration, `w[3]`, group = .chain, color = .chain)) +
+sampling_p5 <- ggplot(draws_df, aes(.iteration, `w[3]`, group = .chain, color = .chain)) +
   geom_line(alpha = 0.5) +
   theme_classic()
 
-ggplot(draws_df, aes(.iteration, `w[4]`, group = .chain, color = .chain)) +
+sampling_p6 <- ggplot(draws_df, aes(.iteration, `w[4]`, group = .chain, color = .chain)) +
   geom_line(alpha = 0.5) +
   theme_classic()
 
-ggplot(draws_df, aes(.iteration, `w[5]`, group = .chain, color = .chain)) +
+sampling_p7 <- ggplot(draws_df, aes(.iteration, `w[5]`, group = .chain, color = .chain)) +
   geom_line(alpha = 0.5) +
   theme_classic()
 
-ggplot(draws_df) +
+ggsave(filename = "figures/parameter_recovery_example/sampling_p1.png", plot = sampling_p1)
+ggsave(filename = "figures/parameter_recovery_example/sampling_p2.png", plot = sampling_p2)
+ggsave(filename = "figures/parameter_recovery_example/sampling_p3.png", plot = sampling_p3)
+ggsave(filename = "figures/parameter_recovery_example/sampling_p4.png", plot = sampling_p4)
+ggsave(filename = "figures/parameter_recovery_example/sampling_p5.png", plot = sampling_p5)
+ggsave(filename = "figures/parameter_recovery_example/sampling_p6.png", plot = sampling_p6)
+ggsave(filename = "figures/parameter_recovery_example/sampling_p7.png", plot = sampling_p7)
+```
+
+
+```{r}
+#prior posterior updates
+
+prior_post_1 <- ggplot(draws_df) +
   geom_histogram(aes(c), alpha = 0.6, fill = "lightblue") +
   geom_histogram(aes(c_prior), alpha = 0.6, fill = "pink") +
   geom_vline(xintercept = c_val) +
   theme_bw()
 
-ggplot(draws_df) +
+prior_post_2 <- ggplot(draws_df) +
   geom_histogram(aes(`w[1]`), alpha = 0.6, fill = "lightblue") +
   geom_histogram(aes(`w_prior[1]`), alpha = 0.6, fill = "pink") +
   geom_vline(xintercept = weights_sim[1]) +
   theme_bw()
 
-ggplot(draws_df) +
+prior_post_3 <- ggplot(draws_df) +
   geom_histogram(aes(`w[2]`), alpha = 0.6, fill = "lightblue") +
   geom_histogram(aes(`w_prior[2]`), alpha = 0.6, fill = "pink") +
   geom_vline(xintercept = weights_sim[2]) +
   theme_bw()
 
-ggplot(draws_df) +
+prior_post_4 <- ggplot(draws_df) +
   geom_histogram(aes(`w[3]`), alpha = 0.6, fill = "lightblue") +
   geom_histogram(aes(`w_prior[3]`), alpha = 0.6, fill = "pink") +
   geom_vline(xintercept = weights_sim[3]) +
   theme_bw()
 
-ggplot(draws_df) +
+prior_post_5 <- ggplot(draws_df) +
   geom_histogram(aes(`w[4]`), alpha = 0.6, fill = "lightblue") +
   geom_histogram(aes(`w_prior[4]`), alpha = 0.6, fill = "pink") +
   geom_vline(xintercept = weights_sim[4]) +
   theme_bw()
 
-ggplot(draws_df) +
+prior_post_6 <- ggplot(draws_df) +
   geom_histogram(aes(`w[5]`), alpha = 0.6, fill = "lightblue") +
   geom_histogram(aes(`w_prior[5]`), alpha = 0.6, fill = "pink") +
   geom_vline(xintercept = weights_sim[5]) +
   theme_bw()
 
-draws_df %>% 
+prior_post_plots <- ggarrange(prior_post_1, prior_post_2, prior_post_3, prior_post_4, prior_post_5, prior_post_6, ncol = 3, nrow = 2)
+
+ggsave(filename = "figures/parameter_recovery_example/prior_post_plots.png", plot = prior_post_plots, width = 12, height = 7)
+```
+
+
+```{r}
+# additional model checks
+
+sanity_check_1 <- draws_df %>% 
   mutate(all_but_w1 = `w[2]`+`w[3]`+`w[4]`+`w[5]`) %>% 
   ggplot() +
   geom_point(aes(`w[1]`, all_but_w1), alpha = 0.6, color = "lightblue") +
-  theme_bw()
+  theme_bw() +
+  labs(title = "Sampling of Weights", subtitle = "Sanity check for simplex")
 
-ggplot(draws_df) +
+sanity_check_2 <- ggplot(draws_df) +
   geom_point(aes(c, `w[1]`), alpha = 0.6, color = "lightblue") +
   theme_bw()
 
-ggplot(draws_df) +
+sanity_check_3 <- ggplot(draws_df) +
   geom_point(aes(c, `w[2]`), alpha = 0.6, color = "lightblue") +
   theme_bw()
 
-ggplot(draws_df) +
+sanity_check_4 <- ggplot(draws_df) +
   geom_point(aes(c, `w[3]`), alpha = 0.6, color = "lightblue") +
   theme_bw()
 
-ggplot(draws_df) +
+sanity_check_5 <- ggplot(draws_df) +
   geom_point(aes(c, `w[4]`), alpha = 0.6, color = "lightblue") +
   theme_bw()
 
-ggplot(draws_df) +
+sanity_check_6 <- ggplot(draws_df) +
   geom_point(aes(c, `w[5]`), alpha = 0.6, color = "lightblue") +
   theme_bw()
 
-ggplot(draws_df) +
+sanity_check_7 <- ggplot(draws_df) +
   geom_point(aes(`w[1]`, `w[2]`), alpha = 0.6, color = "lightblue") +
   theme_bw()
 
+ggsave(filename = "figures/parameter_recovery_example/sanity_check_1.png", plot = sanity_check_1)
+ggsave(filename = "figures/parameter_recovery_example/sanity_check_2.png", plot = sanity_check_2)
+ggsave(filename = "figures/parameter_recovery_example/sanity_check_3.png", plot = sanity_check_3)
+ggsave(filename = "figures/parameter_recovery_example/sanity_check_4.png", plot = sanity_check_4)
+ggsave(filename = "figures/parameter_recovery_example/sanity_check_5.png", plot = sanity_check_5)
+ggsave(filename = "figures/parameter_recovery_example/sanity_check_6.png", plot = sanity_check_6)
+ggsave(filename = "figures/parameter_recovery_example/sanity_check_7.png", plot = sanity_check_7)
 ```
 
 ## Full Parameter Recovery
@@ -493,11 +544,14 @@ ggplot(draws_df) +
 ```{r}
 plan(multisession, workers = availableCores())
 
+simulated_responses_new <- simulated_responses %>% 
+  filter(agent == 1)
+
 sim_d_and_fit <- function(agent, scaling, weights) {
   
     
-    temp <- simulated_responses %>% subset(
-      c == scaling & w == weights & agent == agent
+    temp <- simulated_responses_new %>% subset(
+      c == scaling & w == weights
       )
     
     data <- list(
@@ -523,7 +577,7 @@ sim_d_and_fit <- function(agent, scaling, weights) {
     )
     
     draws_df <- as_draws_df(samples_gcm$draws()) 
-    temp <- tibble(trueC = scaling, trueW = weights, agent = agent,
+    temp <- tibble(trueC = scaling, trueW = weights,
                    estC = draws_df$c, 
                    estW1 = draws_df$`w[1]`,
                    estW2 = draws_df$`w[2]`,
@@ -537,7 +591,7 @@ sim_d_and_fit <- function(agent, scaling, weights) {
 }
 
 
-temp <- tibble(unique(simulated_responses[,c("agent", "c", "w")])) %>%
+temp <- tibble(unique(simulated_responses_new[,c("c", "w")])) %>%
   rename(
     scaling = c,
     weights = w
@@ -550,13 +604,64 @@ write_csv(recovery_df, "output/gcm_parameter_recovery.csv")
 ```
 
 ```{r}
-recovery_df %>% 
-  ggplot(aes(x = estC, y = trueC)) +
-  geom_point() +
-  geom_abline() +
-  facet_wrap(~trueW)
+param_recov_1 <- ggplot(recovery_df) +
+  geom_density(aes(estC, group = trueW, fill = trueW), alpha = 0.3) +
+  facet_wrap(. ~ trueC) +
+  geom_vline(data = recovery_df, aes(xintercept = trueC)) +
+  theme_bw()  +
+  labs(title = "Parameter Recovery", subtitle = "Recovery of C for different weight combinations", x = "Estimated C", y = "Density", fill = "Weight Combination")
 
-# TODO: more plots
+recovery_df_temp <- recovery_df %>%
+  mutate(w1 = ifelse(trueW == "equal", 1/5, ifelse(trueW == "skewed1", 1/2, 0)))
+param_recov_2 <- ggplot(recovery_df_temp) +
+  geom_density(aes(estW1, group = as.factor(trueC), fill = as.factor(trueC)), alpha = 0.3) +
+  facet_wrap(~trueW) +
+  geom_vline(data = recovery_df_temp, aes(xintercept = w1)) +
+  theme_bw()  +
+  labs(title = "Parameter Recovery", subtitle = "Recovery of W1 for different values of C", x = "Estimated W1", y = "Density", fill = "C")
+
+recovery_df_temp <- recovery_df %>%
+  mutate(w2 = ifelse(trueW == "equal", 1/5, ifelse(trueW == "skewed1", 1/2, 0)))
+param_recov_3 <- ggplot(recovery_df_temp) +
+  geom_density(aes(estW2, group = as.factor(trueC), fill = as.factor(trueC)), alpha = 0.3) +
+  facet_wrap(~trueW) +
+  geom_vline(data = recovery_df_temp, aes(xintercept = w2)) +
+  theme_bw()  +
+  labs(title = "Parameter Recovery", subtitle = "Recovery of W2 for different values of C", x = "Estimated W2", y = "Density", fill = "C")
+
+recovery_df_temp <- recovery_df %>%
+  mutate(w3 = ifelse(trueW == "equal", 1/5, ifelse(trueW == "skewed1", 0, 3/10)))
+param_recov_4 <- ggplot(recovery_df_temp) +
+  geom_density(aes(estW3, group = as.factor(trueC), fill = as.factor(trueC)), alpha = 0.3) +
+  facet_wrap(~trueW) +
+  geom_vline(data = recovery_df_temp, aes(xintercept = w3)) +
+  theme_bw()  +
+  labs(title = "Parameter Recovery", subtitle = "Recovery of W3 for different values of C", x = "Estimated W3", y = "Density", fill = "C")
+
+recovery_df_temp <- recovery_df %>%
+  mutate(w4 = ifelse(trueW == "equal", 1/5, ifelse(trueW == "skewed1", 0, 3/10)))
+param_recov_5 <- ggplot(recovery_df_temp) +
+  geom_density(aes(estW4, group = as.factor(trueC), fill = as.factor(trueC)), alpha = 0.3) +
+  facet_wrap(~trueW) +
+  geom_vline(data = recovery_df_temp, aes(xintercept = w4)) +
+  theme_bw()  +
+  labs(title = "Parameter Recovery", subtitle = "Recovery of W4 for different values of C", x = "Estimated W4", y = "Density", fill = "C")
+
+recovery_df_temp <- recovery_df %>%
+  mutate(w5 = ifelse(trueW == "equal", 1/5, ifelse(trueW == "skewed1", 0, 4/10)))
+param_recov_6 <- ggplot(recovery_df_temp) +
+  geom_density(aes(estW5, group = as.factor(trueC), fill = as.factor(trueC)), alpha = 0.3) +
+  facet_wrap(~trueW) +
+  geom_vline(data = recovery_df_temp, aes(xintercept = w5)) +
+  theme_bw()  +
+  labs(title = "Parameter Recovery", subtitle = "Recovery of W5 for different values of C", x = "Estimated W5", y = "Density", fill = "C")
+
+ggsave(filename = "figures/parameter_recovery/param_recov_1.png", plot = param_recov_1)
+ggsave(filename = "figures/parameter_recovery/param_recov_2.png", plot = param_recov_2)
+ggsave(filename = "figures/parameter_recovery/param_recov_3.png", plot = param_recov_3)
+ggsave(filename = "figures/parameter_recovery/param_recov_4.png", plot = param_recov_4)
+ggsave(filename = "figures/parameter_recovery/param_recov_5.png", plot = param_recov_5)
+ggsave(filename = "figures/parameter_recovery/param_recov_6.png", plot = param_recov_6)
 ```
 
 
