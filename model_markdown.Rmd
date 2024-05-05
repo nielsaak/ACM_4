@@ -782,12 +782,15 @@ ggsave(filename = "figures/parameter_recovery/param_recov_6.png", plot = param_r
 df <- read_csv("data/AlienData.txt")
 
 df <- df %>% 
-  filter(condition == 1, session == 1) %>% 
+  filter(condition == 1, session == 1) %>%
+  filter(!str_detect(stimulus, "pt")) %>% 
   mutate(resp_dan = ifelse((response == 3)|(response==4), 1, 0)) %>% 
   mutate(correct_dan = ifelse(resp_dan == dangerous, 1, 0)) %>% 
-  group_by(subject) %>% 
-  mutate(performance_dan = cumsum(correct_dan) / seq_along(correct_dan)) %>% 
-  filter(!str_detect(stimulus, "pt"))
+  mutate("feat_1" = ifelse(str_detect(stimulus, "1....\\.jpg"), 1, 0)) %>% 
+  mutate("feat_2" = ifelse(str_detect(stimulus, ".1...\\.jpg"), 1, 0)) %>% 
+  mutate("feat_3" = ifelse(str_detect(stimulus, "..1..\\.jpg"), 1, 0)) %>% 
+  mutate("feat_4" = ifelse(str_detect(stimulus, "...1.\\.jpg"), 1, 0)) %>% 
+  mutate("feat_5" = ifelse(str_detect(stimulus, "....1\\.jpg"), 1, 0))
 ```
 
 ```{r}
@@ -796,24 +799,12 @@ gcm_model <- cmdstan_model("stan/gcm_bayesian.stan", cpp_options = list(stan_thr
 ```
 
 ```{r}
-# These are already defined above, just copied them here again, so I don't have to run every chunk
-feat_1 <- c(0,1) # spots
-feat_2 <- c(0,1) # eyes
-feat_3 <- c(0,1)
-feat_4 <- c(0,1) # arms
-feat_5 <- c(0,1)
-stimuli <- expand.grid(feat_1 = feat_1, feat_2 = feat_2, feat_3 = feat_3, feat_4 = feat_4, feat_5 = feat_5)
-stimuli <- rbind(stimuli[sample(nrow(stimuli)),],stimuli[sample(nrow(stimuli)),],stimuli[sample(nrow(stimuli)),])
-
-danger <- ifelse((stimuli$feat_1 == 1) & (stimuli$feat_2 == 1), 1, 0)
-nutri <- ifelse((stimuli$feat_4 == 1), 1, 0)
-
-danger_sim <- c(danger)
-stimuli_sim <- rbind(stimuli)
-
 # Loop through subjects
 results <- list()
 for (subject_id in unique(df$subject)) {
+  
+  print(paste('Subject: ', subject_id, sep = ""))
+  
   # Filter data for the current subject
   subject_data <- df %>% filter(subject == subject_id)
   
@@ -821,9 +812,9 @@ for (subject_id in unique(df$subject)) {
   data_gcm_Bayes <- list(
     ntrials = nrow(subject_data),
     nfeatures = 5,
-    cat_one = danger_sim,  # This should align with how stimuli are set for each trial
-    y = subject_data$correct_dan,  # Assuming this is the response
-    obs = as.matrix(stimuli_sim),
+    cat_one = subject_data$dangerous,  # This should align with how stimuli are set for each trial
+    y = subject_data$resp_dan,  # Assuming this is the response
+    obs = as.matrix(select(subject_data, "feat_1", "feat_2", "feat_3", "feat_4", "feat_5")),
     b = 0.5,
     w_prior_values = c(1, 1, 1, 1, 1),
     c_prior_values = c(0, 1)
@@ -832,25 +823,24 @@ for (subject_id in unique(df$subject)) {
   samples <- gcm_model$sample(
     data = data_gcm_Bayes,
     seed = 123,
-    chains = 4,
-    parallel_chains = 4,
+    chains = 2,
+    parallel_chains = 2,
     threads_per_chain = 2,
-    iter_warmup = 2000,
-    iter_sampling = 2000,
-    refresh = 1000,
+    iter_warmup = 1000,
+    iter_sampling = 1000,
+    refresh = 500,
     max_treedepth = 20,
     adapt_delta = 0.99
   )
-  
-  print('Subject: ', subject_id)
-  
-  results[[subject_id]] <- samples
+
+
+results[[subject_id]] <- samples
 }
 ```
 
 ```{r}
 # Check rhat
-print(results[[5]])
+print(results[[1]])
 ```
 
 ### Parameter means
@@ -863,14 +853,17 @@ for (subject_id in unique(df$subject)) {
   
   # Extract summary and convert to a data frame
   summary_df <- as.data.frame(samples$summary())
+  
+  mean_values <- summary_df %>%
+    filter(variable %in% c("w[1]", "w[2]", "w[3]", "w[4]", "w[5]", "logit_c", "c"))
 
-  # Ensure only numeric columns are summarized
-  numeric_summary_df <- summary_df %>%
-    select_if(~is.numeric(.))
-
-  # Calculate the mean for each numeric column
-  mean_values <- numeric_summary_df %>%
-    summarise(across(everything(), mean, na.rm = TRUE))
+  # # Ensure only numeric columns are summarized
+  # numeric_summary_df <- summary_df %>%
+  #   select_if(~is.numeric(.))
+  # 
+  # # Calculate the mean for each numeric column
+  # mean_values <- numeric_summary_df %>%
+  #   summarise(across(everything(), mean, na.rm = TRUE))
 
   # Append subject identifier
   mean_values$Subject <- subject_id
@@ -892,31 +885,28 @@ print(combined_param_means)
 # Using pivot_longer to reshape data for plotting
 # Make sure to exclude 'Subject_ID' from the reshaping operation explicitly
 long_means <- combined_param_means %>%
+  select(-c(ess_bulk, ess_tail, Subject)) %>% 
   pivot_longer(
-    cols = -c(Subject_ID, ess_bulk, ess_tail),  # Exclude some columns from being pivoted
+    cols = -c(Subject_ID, variable),  # Exclude some columns from being pivoted
     names_to = "Parameter", 
     values_to = "MeanValue"
   )
 
-# Remove columns
-long_means <- long_means %>% select(-ess_bulk)
-long_means <- long_means %>% select(-ess_tail)
-
-# For some reason, we have parameter rows called 'Subject'
-long_means <- long_means[long_means$Parameter != 'Subject', ]
-
-print(head(long_means))
+write_csv(long_means, "output/parameter_estimation,full.csv")
 
 # Plotting
-ggplot(long_means, aes(x = Parameter, y = MeanValue, fill = Subject_ID)) +
+sick_plot <- ggplot(long_means, aes(x = Parameter, y = MeanValue, fill = Subject_ID)) +
   geom_bar(stat = "identity", position = "dodge") +
-  theme_minimal() +
+  theme_bw() +
   labs(title = "Mean Parameter Estimates per Subject", x = "Parameter", y = "Mean Value") +
-  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  facet_wrap(~variable, scales = "free")
+
+ggsave("figures/parameter_estimation.png", sick_plot, width = 14, height = 7)
 ```
 
 ```{r}
-draws_df <- as_draws_df(samples$draws())
+draws_df <- as_draws_df(results[[1]]$draws())
 
 # Reshape from wide to long
 long_draws_df <- draws_df %>%
@@ -927,7 +917,7 @@ long_draws_df <- draws_df %>%
   )
 
 # Plot with facets
-ggplot(long_draws_df, aes(x = .iteration, y = Value, group = .chain, color = .chain)) +
+sampling_checks <- ggplot(long_draws_df, aes(x = .iteration, y = Value, group = .chain, color = .chain)) +
   geom_line(alpha = 0.5) +
   facet_wrap(~ Parameter, scales = "free_y") +
   theme_classic() +
@@ -960,7 +950,7 @@ prior_data$Parameter <- gsub("_prior", "", prior_data$Parameter)
 combined_data <- bind_rows(actual_data, prior_data)
 
 # Plot using ggplot with facets
-ggplot(combined_data, aes(x = Value, fill = Type, alpha = Type)) +
+prior_posterior <- ggplot(combined_data, aes(x = Value, fill = Type, alpha = Type)) +
   geom_histogram(position = "identity", bins = 30) +  # Adjust number of bins as necessary
   facet_wrap(~ Parameter, scales = "free_x") +
   scale_fill_manual(values = c(Actual = "lightblue", Prior = "pink")) +
@@ -968,5 +958,8 @@ ggplot(combined_data, aes(x = Value, fill = Type, alpha = Type)) +
   theme_bw() +
   theme(legend.position = "bottom") +
   labs(title = "Histograms of Parameters and Their Priors", x = "Value", y = "Count")
+
+ggsave("figures/parameter_estimation_caterpiller.png", sampling_checks, width = 14, height = 7)
+ggsave("figures/parameter_estimation_prior_posterior.png", prior_posterior, width = 14, height = 7)
 ```
 
